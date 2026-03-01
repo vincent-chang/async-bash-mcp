@@ -12,6 +12,7 @@ pub struct ProcessInfo {
     pub command: String,
     pub start_time: Instant,
     pub cwd: Option<String>,
+    child_pid: Option<u32>,
     stdout_buffer: Arc<Mutex<String>>,
     stderr_buffer: Arc<Mutex<String>>,
     stdout_position: usize,
@@ -91,6 +92,7 @@ impl ProcessManager {
 
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
 
+        let child_pid = child.id();
         let stdout = child.stdout.take().expect("stdout not captured");
         let stderr = child.stderr.take().expect("stderr not captured");
 
@@ -156,6 +158,7 @@ impl ProcessManager {
                 command: command.to_string(),
                 start_time: Instant::now(),
                 cwd: resolved_cwd,
+                child_pid,
                 stdout_buffer,
                 stderr_buffer,
                 stdout_position: 0,
@@ -191,13 +194,30 @@ impl ProcessManager {
         let exit_code_arc = self.processes[&process_id].exit_code.clone();
 
         if terminate && !finished.load(Ordering::SeqCst) {
-            // Wait up to 5s for the process to finish (kill_on_drop handles the actual kill)
-            // We mark the process's finished flag to force completion
-            let _ = tokio::time::timeout(Duration::from_secs(5), notify.notified()).await;
-            if !finished.load(Ordering::SeqCst) {
-                finished.store(true, Ordering::SeqCst);
-                *exit_code_arc.lock().await = Some(-1);
-                notify.notify_waiters();
+            if let Some(pid) = self.processes[&process_id].child_pid {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    nix::sys::signal::Signal::SIGTERM,
+                );
+            }
+
+            let timed_out = tokio::time::timeout(Duration::from_secs(5), notify.notified())
+                .await
+                .is_err();
+
+            if timed_out && !finished.load(Ordering::SeqCst) {
+                if let Some(pid) = self.processes[&process_id].child_pid {
+                    let _ = nix::sys::signal::kill(
+                        nix::unistd::Pid::from_raw(pid as i32),
+                        nix::sys::signal::Signal::SIGKILL,
+                    );
+                }
+                let _ = tokio::time::timeout(Duration::from_millis(500), notify.notified()).await;
+                if !finished.load(Ordering::SeqCst) {
+                    finished.store(true, Ordering::SeqCst);
+                    *exit_code_arc.lock().await = Some(-1);
+                    notify.notify_waiters();
+                }
             }
         } else if !finished.load(Ordering::SeqCst) {
             if let Some(ref cb) = progress_callback {
@@ -411,6 +431,20 @@ mod tests {
         assert!(
             result.finished,
             "process should be finished after terminate"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_terminate_fast() {
+        let mut pm = ProcessManager::new();
+        let id = pm.spawn_process("sleep 10", None).await.unwrap();
+        let start = Instant::now();
+        let _ = pm.poll_process(id, 8000, true, None).await.unwrap();
+        let elapsed = start.elapsed().as_millis();
+        assert!(
+            elapsed < 4000,
+            "terminate should return quickly, took {}ms",
+            elapsed
         );
     }
 
