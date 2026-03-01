@@ -42,6 +42,29 @@ pub struct ProcessListItem {
     pub done: bool,
 }
 
+fn last_n_lines(s: &str, n: usize) -> &str {
+    if s.is_empty() || n == 0 {
+        return s;
+    }
+    let mut found = 0;
+    let bytes = s.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if bytes[i] == b'\n' {
+            found += 1;
+            if found == n {
+                return &s[i + 1..];
+            }
+        }
+    }
+    s
+}
+
+fn round_ms(secs: f64) -> u64 {
+    (secs * 1000.0).round() as u64
+}
+
 impl ProcessManager {
     pub fn new() -> Self {
         ProcessManager {
@@ -156,6 +179,7 @@ impl ProcessManager {
         process_id: u32,
         wait_ms: u64,
         terminate: bool,
+        progress_callback: Option<Arc<dyn Fn(u64, String) + Send + Sync>>,
     ) -> Result<PollResult, String> {
         if !self.processes.contains_key(&process_id) {
             return Err(format!("Process {} not found", process_id));
@@ -180,7 +204,54 @@ impl ProcessManager {
                 notify.notify_waiters();
             }
         } else if !finished.load(Ordering::SeqCst) {
-            let _ = tokio::time::timeout(Duration::from_millis(wait_ms), notify.notified()).await;
+            if let Some(ref cb) = progress_callback {
+                let cmd = self.processes[&process_id].command.clone();
+                let stdout_arc = self.processes[&process_id].stdout_buffer.clone();
+                let stderr_arc = self.processes[&process_id].stderr_buffer.clone();
+                let start_time = self.processes[&process_id].start_time;
+                let cb_clone = cb.clone();
+
+                let progress_task = tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(Duration::from_millis(300));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        interval.tick().await;
+                        let stdout = stdout_arc.lock().await.clone();
+                        let stderr = stderr_arc.lock().await.clone();
+                        let elapsed_secs = start_time.elapsed().as_secs_f64();
+                        let stdout_tail = last_n_lines(&stdout, 5).to_string();
+                        let stderr_tail = last_n_lines(&stderr, 5).to_string();
+                        let msg = format!(
+                            "# `$ {}` \n\n## stdout\n\n```\n{}\n```\n\n## stderr\n\n```\n{}\n```\n",
+                            cmd, stdout_tail, stderr_tail
+                        );
+                        cb_clone(round_ms(elapsed_secs), msg);
+                    }
+                });
+
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(wait_ms), notify.notified()).await;
+                progress_task.abort();
+                let _ = progress_task.await;
+
+                let elapsed_secs = self.processes[&process_id]
+                    .start_time
+                    .elapsed()
+                    .as_secs_f64();
+                let stdout_snap = self.processes[&process_id].stdout_buffer.lock().await.clone();
+                let stderr_snap = self.processes[&process_id].stderr_buffer.lock().await.clone();
+                let stdout_tail = last_n_lines(&stdout_snap, 5).to_string();
+                let stderr_tail = last_n_lines(&stderr_snap, 5).to_string();
+                let cmd = self.processes[&process_id].command.clone();
+                let final_msg = format!(
+                    "# `$ {}` \n\n## stdout\n\n```\n{}\n```\n\n## stderr\n\n```\n{}\n```\n",
+                    cmd, stdout_tail, stderr_tail
+                );
+                cb(round_ms(elapsed_secs), final_msg);
+            } else {
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(wait_ms), notify.notified()).await;
+            }
         }
 
         // Extract incremental output
@@ -244,6 +315,21 @@ impl Default for ProcessManager {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_last_n_lines_basic() {
+        assert_eq!(last_n_lines("a\nb\nc\nd\ne\nf", 3), "d\ne\nf");
+    }
+
+    #[test]
+    fn test_last_n_lines_fewer_than_n() {
+        assert_eq!(last_n_lines("a\nb", 5), "a\nb");
+    }
+
+    #[test]
+    fn test_last_n_lines_empty() {
+        assert_eq!(last_n_lines("", 5), "");
+    }
+
     #[tokio::test]
     async fn test_spawn_simple_command() {
         let mut pm = ProcessManager::new();
@@ -268,7 +354,10 @@ mod tests {
     async fn test_poll_output() {
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("echo hello", None).await.unwrap();
-        let result = pm.poll_process(id, 2000, false).await.unwrap();
+        let result = pm
+            .poll_process(id, 2000, false, None)
+            .await
+            .unwrap();
         assert!(result.stdout.contains("hello"), "stdout: {:?}", result.stdout);
         assert!(result.finished);
         assert_eq!(result.exit_code, Some(0));
@@ -282,8 +371,8 @@ mod tests {
             .await
             .unwrap();
 
-        let r1 = pm.poll_process(id, 100, false).await.unwrap();
-        let r2 = pm.poll_process(id, 2000, false).await.unwrap();
+        let r1 = pm.poll_process(id, 100, false, None).await.unwrap();
+        let r2 = pm.poll_process(id, 2000, false, None).await.unwrap();
 
         let combined = format!("{}{}", r1.stdout, r2.stdout);
         assert!(combined.contains("first"), "combined: {:?}", combined);
@@ -300,7 +389,10 @@ mod tests {
 
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("pwd", Some(&tmp_path)).await.unwrap();
-        let result = pm.poll_process(id, 2000, false).await.unwrap();
+        let result = pm
+            .poll_process(id, 2000, false, None)
+            .await
+            .unwrap();
         let out = result.stdout.trim().to_string();
         assert!(
             out.contains(tmp.path().file_name().unwrap().to_str().unwrap()),
@@ -313,7 +405,7 @@ mod tests {
     async fn test_terminate() {
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("sleep 10", None).await.unwrap();
-        let result = pm.poll_process(id, 8000, true).await.unwrap();
+        let result = pm.poll_process(id, 8000, true, None).await.unwrap();
         assert!(result.finished, "process should be finished after terminate");
     }
 
@@ -322,7 +414,7 @@ mod tests {
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("sleep 5", None).await.unwrap();
         let start = Instant::now();
-        let result = pm.poll_process(id, 200, false).await.unwrap();
+        let result = pm.poll_process(id, 200, false, None).await.unwrap();
         let elapsed = start.elapsed().as_millis();
         assert!(!result.finished, "should not be finished yet");
         assert!(
@@ -338,7 +430,7 @@ mod tests {
         let id = pm.spawn_process("echo done", None).await.unwrap();
         let mut found_finished = false;
         for _ in 0..10 {
-            let r = pm.poll_process(id, 500, false).await.unwrap();
+            let r = pm.poll_process(id, 500, false, None).await.unwrap();
             if r.finished {
                 found_finished = true;
                 break;
@@ -352,7 +444,7 @@ mod tests {
     #[tokio::test]
     async fn test_error_invalid_id() {
         let mut pm = ProcessManager::new();
-        let result = pm.poll_process(999999, 100, false).await;
+        let result = pm.poll_process(999999, 100, false, None).await;
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("not found"), "error: {:?}", msg);
@@ -362,7 +454,7 @@ mod tests {
     async fn test_stderr_capture() {
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("echo err >&2", None).await.unwrap();
-        let result = pm.poll_process(id, 2000, false).await.unwrap();
+        let result = pm.poll_process(id, 2000, false, None).await.unwrap();
         assert!(result.stderr.contains("err"), "stderr: {:?}", result.stderr);
     }
 
@@ -385,8 +477,84 @@ mod tests {
     async fn test_long_output() {
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("seq 1 100", None).await.unwrap();
-        let result = pm.poll_process(id, 5000, false).await.unwrap();
+        let result = pm.poll_process(id, 5000, false, None).await.unwrap();
         assert!(result.stdout.contains("100"), "stdout: {:?}", result.stdout);
         assert!(result.finished);
+    }
+
+    #[tokio::test]
+    async fn test_progress_message_format() {
+        use std::sync::{Arc, Mutex};
+        let messages = Arc::new(Mutex::new(Vec::<String>::new()));
+        let messages_clone = messages.clone();
+        let cb: Arc<dyn Fn(u64, String) + Send + Sync> = Arc::new(move |_ms, msg| {
+            messages_clone.lock().unwrap().push(msg);
+        });
+
+        let mut pm = ProcessManager::new();
+        let id = pm.spawn_process("echo hello", None).await.unwrap();
+        let _ = pm.poll_process(id, 1500, false, Some(cb)).await.unwrap();
+
+        let msgs = messages.lock().unwrap();
+        assert!(!msgs.is_empty(), "should have at least one progress message");
+        let last = msgs.last().unwrap();
+        assert!(
+            last.contains("## stdout"),
+            "message should contain stdout section: {}",
+            last
+        );
+        assert!(
+            last.contains("## stderr"),
+            "message should contain stderr section: {}",
+            last
+        );
+        assert!(
+            last.contains("echo hello"),
+            "message should contain command: {}",
+            last
+        );
+    }
+
+    #[tokio::test]
+    async fn test_progress_during_wait() {
+        use std::sync::{Arc, Mutex};
+        let calls = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let calls_clone = calls.clone();
+        let cb: Arc<dyn Fn(u64, String) + Send + Sync> = Arc::new(move |ms, _msg| {
+            calls_clone.lock().unwrap().push(ms);
+        });
+
+        let mut pm = ProcessManager::new();
+        let id = pm.spawn_process("sleep 2", None).await.unwrap();
+        let _ = pm.poll_process(id, 700, false, Some(cb)).await.unwrap();
+
+        let count = calls.lock().unwrap().len();
+        assert!(
+            count >= 1,
+            "progress callback should be called at least once, got {}",
+            count
+        );
+    }
+
+    #[tokio::test]
+    async fn test_progress_elapsed_correct() {
+        use std::sync::{Arc, Mutex};
+        let last_ms: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let last_ms_clone = last_ms.clone();
+        let cb: Arc<dyn Fn(u64, String) + Send + Sync> = Arc::new(move |ms, _msg| {
+            *last_ms_clone.lock().unwrap() = ms;
+        });
+
+        let mut pm = ProcessManager::new();
+        let id = pm.spawn_process("sleep 0.3", None).await.unwrap();
+        let _ = pm.poll_process(id, 2000, false, Some(cb)).await.unwrap();
+
+        let reported_ms = *last_ms.lock().unwrap();
+        assert!(
+            reported_ms < 5000,
+            "elapsed should be <5000ms (was {} ms), Python bug would give 2,000,000",
+            reported_ms
+        );
+        assert!(reported_ms > 0, "elapsed should be >0");
     }
 }
