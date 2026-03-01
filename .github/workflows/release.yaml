@@ -33,9 +33,9 @@ jobs:
           else
             cargo build --release --target ${{ matrix.target }}
           fi
-      - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/async-bash-mcp ${{ matrix.artifact_name }}
+      - name: Package binary
+        run: zip ${{ matrix.artifact_name }}.zip -j target/${{ matrix.target }}/release/async-bash-mcp
       - name: Upload binary
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ matrix.artifact_name }}
+          files: ${{ matrix.artifact_name }}.zip
