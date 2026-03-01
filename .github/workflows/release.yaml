@@ -2,40 +2,34 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-
+  build:
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+    runs-on: ${{ contains(matrix.target, 'apple') && 'macos-latest' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          enable-cache: true
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Build package
-        run: uv build
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          targets: ${{ matrix.target }}
+      - name: Install cross (Linux ARM64 only)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cargo install cross
+      - name: Build
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+      - name: Upload binary
+        uses: softprops/action-gh-release@v1
         with:
-          files: dist/*
-          generate_release_notes: true
-
-      - name: Publish to PyPI
-        run: uv publish
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
+          files: target/${{ matrix.target }}/release/async-bash-mcp

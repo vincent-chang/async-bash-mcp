@@ -1,6 +1,6 @@
 # async-bash-mcp
 
-[![pypi](https://img.shields.io/pypi/v/async-bash-mcp)](https://pypi.org/project/async-bash-mcp/) [![Test](https://github.com/xhuw/async-bash-mcp/actions/workflows/test.yaml/badge.svg)](https://github.com/xhuw/async-bash-mcp/actions/workflows/test.yaml)
+[![Rust](https://github.com/xhuw/async-bash-mcp/actions/workflows/test.yaml/badge.svg)](https://github.com/xhuw/async-bash-mcp/actions/workflows/test.yaml)
 
 An MCP server for spawning and managing bash commands asynchronously. Run multiple shell commands in parallel and check their progress independently.
 
@@ -17,12 +17,14 @@ Add to your `opencode.json` config to replace the bash tool with async-bash-mcp:
   "mcp": {
     "async-bash": {
       "type": "local",
-      "command": ["uvx", "async-bash-mcp"],
+      "command": ["/path/to/async-bash-mcp"],
       "enabled": true
     }
   }
 }
 ```
+Download the latest binary from [GitHub Releases](https://github.com/xhuw/async-bash-mcp/releases) or build from source with `cargo build --release`.
+
 
 Then use commands like:
 - "Spawn a long-running build in the background"
@@ -66,6 +68,11 @@ This tool is designed to replace opencode's bash tool for any scenario involving
 
 ## Installation
 
+Download the pre-built binary from [GitHub Releases](https://github.com/xhuw/async-bash-mcp/releases), or build from source:
+
 ```bash
-uvx async-bash-mcp
+cargo build --release
+# Binary will be at: target/release/async-bash-mcp
 ```
+
+The original Python implementation is preserved in the `legacy/` directory.
