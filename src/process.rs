@@ -73,11 +73,7 @@ impl ProcessManager {
         }
     }
 
-    pub async fn spawn_process(
-        &mut self,
-        command: &str,
-        cwd: Option<&str>,
-    ) -> Result<u32, String> {
+    pub async fn spawn_process(&mut self, command: &str, cwd: Option<&str>) -> Result<u32, String> {
         validate_command(command)?;
         let resolved_cwd = validate_cwd(cwd)?;
 
@@ -238,8 +234,16 @@ impl ProcessManager {
                     .start_time
                     .elapsed()
                     .as_secs_f64();
-                let stdout_snap = self.processes[&process_id].stdout_buffer.lock().await.clone();
-                let stderr_snap = self.processes[&process_id].stderr_buffer.lock().await.clone();
+                let stdout_snap = self.processes[&process_id]
+                    .stdout_buffer
+                    .lock()
+                    .await
+                    .clone();
+                let stderr_snap = self.processes[&process_id]
+                    .stderr_buffer
+                    .lock()
+                    .await
+                    .clone();
                 let stdout_tail = last_n_lines(&stdout_snap, 5).to_string();
                 let stderr_tail = last_n_lines(&stderr_snap, 5).to_string();
                 let cmd = self.processes[&process_id].command.clone();
@@ -354,11 +358,12 @@ mod tests {
     async fn test_poll_output() {
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("echo hello", None).await.unwrap();
-        let result = pm
-            .poll_process(id, 2000, false, None)
-            .await
-            .unwrap();
-        assert!(result.stdout.contains("hello"), "stdout: {:?}", result.stdout);
+        let result = pm.poll_process(id, 2000, false, None).await.unwrap();
+        assert!(
+            result.stdout.contains("hello"),
+            "stdout: {:?}",
+            result.stdout
+        );
         assert!(result.finished);
         assert_eq!(result.exit_code, Some(0));
     }
@@ -389,10 +394,7 @@ mod tests {
 
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("pwd", Some(&tmp_path)).await.unwrap();
-        let result = pm
-            .poll_process(id, 2000, false, None)
-            .await
-            .unwrap();
+        let result = pm.poll_process(id, 2000, false, None).await.unwrap();
         let out = result.stdout.trim().to_string();
         assert!(
             out.contains(tmp.path().file_name().unwrap().to_str().unwrap()),
@@ -406,7 +408,10 @@ mod tests {
         let mut pm = ProcessManager::new();
         let id = pm.spawn_process("sleep 10", None).await.unwrap();
         let result = pm.poll_process(id, 8000, true, None).await.unwrap();
-        assert!(result.finished, "process should be finished after terminate");
+        assert!(
+            result.finished,
+            "process should be finished after terminate"
+        );
     }
 
     #[tokio::test]
@@ -496,7 +501,10 @@ mod tests {
         let _ = pm.poll_process(id, 1500, false, Some(cb)).await.unwrap();
 
         let msgs = messages.lock().unwrap();
-        assert!(!msgs.is_empty(), "should have at least one progress message");
+        assert!(
+            !msgs.is_empty(),
+            "should have at least one progress message"
+        );
         let last = msgs.last().unwrap();
         assert!(
             last.contains("## stdout"),

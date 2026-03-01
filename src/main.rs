@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_bash_mcp::server::AsyncBashServer;
-use rmcp::{ServiceExt, transport::io::stdio};
+use rmcp::{transport::io::stdio, ServiceExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -1,13 +1,13 @@
 use crate::process::ProcessManager;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResult, Content, Implementation, ProgressNotificationParam, ServerCapabilities,
         ServerInfo,
     },
-    schemars, tool, tool_handler, tool_router,
+    schemars,
     service::RequestContext,
+    tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -76,7 +76,6 @@ pub struct AsyncBashServer {
 impl Default for AsyncBashServer {
     fn default() -> Self {
         Self::new()
-    
     }
 }
 
@@ -89,13 +88,18 @@ impl AsyncBashServer {
         }
     }
 
-    #[tool(description = "Launch a bash command asynchronously in a subshell.\n\nReturns a unique process ID that can be used to check progress with the poll tool. **ALWAYS POLL THE PROCESS AFTER SPAWNING**.\n\nMultiple commands can be spawned in parallel and independently polled. If the task requires running independent bash commands, run them in parrallel.")]
+    #[tool(
+        description = "Launch a bash command asynchronously in a subshell.\n\nReturns a unique process ID that can be used to check progress with the poll tool. **ALWAYS POLL THE PROCESS AFTER SPAWNING**.\n\nMultiple commands can be spawned in parallel and independently polled. If the task requires running independent bash commands, run them in parrallel."
+    )]
     async fn spawn(
         &self,
         Parameters(params): Parameters<SpawnParams>,
     ) -> Result<CallToolResult, McpError> {
         let mut pm = self.process_manager.lock().await;
-        match pm.spawn_process(&params.command, params.cwd.as_deref()).await {
+        match pm
+            .spawn_process(&params.command, params.cwd.as_deref())
+            .await
+        {
             Ok(id) => {
                 let resp = SpawnResponse { id };
                 let json = serde_json::to_string(&resp)
@@ -111,7 +115,9 @@ impl AsyncBashServer {
         }
     }
 
-    #[tool(description = "List all currently running or recently finished processes. Processes are removed from this list once their results have been accessed via the poll tool.")]
+    #[tool(
+        description = "List all currently running or recently finished processes. Processes are removed from this list once their results have been accessed via the poll tool."
+    )]
     async fn list_processes(&self) -> Result<CallToolResult, McpError> {
         let mut pm = self.process_manager.lock().await;
         let items: Vec<ListItemResponse> = pm
@@ -129,7 +135,9 @@ impl AsyncBashServer {
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
-    #[tool(description = "Check the progress of a spawned process. Returns stdout/stderr output produced since the last poll call. Can optionally wait for completion or terminate the process.\n\n**NEVER LEAVE A PROCESS RUNNING UNPOLLED**. Always poll the process after spawning it to ensure resources are cleaned up.\n\n**TERMINATE THE PROCESS IF YOU NO LONGER NEED IT**. If you don't poll the process, it will continue running indefinitely.")]
+    #[tool(
+        description = "Check the progress of a spawned process. Returns stdout/stderr output produced since the last poll call. Can optionally wait for completion or terminate the process.\n\n**NEVER LEAVE A PROCESS RUNNING UNPOLLED**. Always poll the process after spawning it to ensure resources are cleaned up.\n\n**TERMINATE THE PROCESS IF YOU NO LONGER NEED IT**. If you don't poll the process, it will continue running indefinitely."
+    )]
     async fn poll(
         &self,
         Parameters(params): Parameters<PollParams>,
@@ -258,7 +266,11 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         let mut pm = server.process_manager.lock().await;
         let result = pm.poll_process(id, 2000, false, None).await.unwrap();
-        assert!(result.stdout.contains("hello"), "stdout: {:?}", result.stdout);
+        assert!(
+            result.stdout.contains("hello"),
+            "stdout: {:?}",
+            result.stdout
+        );
         assert!(result.finished);
         assert_eq!(result.exit_code, Some(0));
     }
@@ -268,7 +280,9 @@ mod tests {
         let server = AsyncBashServer::new();
         let id = {
             let mut pm = server.process_manager.lock().await;
-            pm.spawn_process("sleep 0.1 && echo done", None).await.unwrap()
+            pm.spawn_process("sleep 0.1 && echo done", None)
+                .await
+                .unwrap()
         };
         let mut pm = server.process_manager.lock().await;
         let result = pm.poll_process(id, 3000, false, None).await.unwrap();
@@ -300,10 +314,7 @@ mod tests {
     async fn test_poll_wait_zero_invalid() {
         // Validate the guard: wait <= 0 → error
         let wait: i64 = 0;
-        assert!(
-            wait <= 0,
-            "guard condition must catch wait=0: got {wait}"
-        );
+        assert!(wait <= 0, "guard condition must catch wait=0: got {wait}");
         let wait_neg: i64 = -1;
         assert!(
             wait_neg <= 0,
@@ -321,7 +332,10 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         let mut pm = server.process_manager.lock().await;
         let result = pm.poll_process(id, 2000, false, None).await.unwrap();
-        assert!(!result.stdout.is_empty(), "shell detection: stdout should not be empty");
+        assert!(
+            !result.stdout.is_empty(),
+            "shell detection: stdout should not be empty"
+        );
     }
 
     #[tokio::test]

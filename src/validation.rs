@@ -125,7 +125,10 @@ mod tests {
     fn test_dangerous_fork_bomb() {
         assert_eq!(
             validate_command(":(){ :|: & };:"),
-            Err("Command contains potentially dangerous pattern: :\\(\\)\\{\\s*:\\|:\\s*&\\s*\\};:".to_string())
+            Err(
+                "Command contains potentially dangerous pattern: :\\(\\)\\{\\s*:\\|:\\s*&\\s*\\};:"
+                    .to_string()
+            )
         );
     }
 
@@ -198,7 +201,10 @@ mod tests {
         let path_str = tmp_file.path().to_str().expect("non-utf8 path").to_string();
         assert_eq!(
             validate_cwd(Some(&path_str)),
-            Err(format!("Working directory is not a directory: {}", path_str))
+            Err(format!(
+                "Working directory is not a directory: {}",
+                path_str
+            ))
         );
     }
 
