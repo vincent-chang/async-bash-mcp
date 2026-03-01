@@ -8,7 +8,7 @@ An MCP server for spawning and managing bash commands asynchronously. Run multip
 
 ## Background
 
-This project is a Rust rewrite of the original Python implementation [async-bash-mcp](https://github.com/xhuw/async-bash-mcp), built using [opencode](https://opencode.ai/) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) inside [OpenChamber](https://github.com/btriapitsyn/openchamber). As a local-type MCP server, Rust offers lower startup overhead compared to Python, making it a better fit for tools that are launched on every session.
+I discovered the original [async-bash-mcp](https://github.com/xhuw/async-bash-mcp) project while struggling with opencode's bash execution timeouts. The original project effectively solves this problem — it's especially useful for time-consuming operations like downloading and installing project dependencies, where fixed timeouts often fall short. This Rust rewrite was built using [opencode](https://opencode.ai/) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) inside [OpenChamber](https://github.com/btriapitsyn/openchamber). As a local-type MCP server, Rust offers lower startup overhead compared to Python, making it a better fit for tools that are launched on every session.
 
 ## Usage with opencode
 
