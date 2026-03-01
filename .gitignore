@@ -85,3 +85,7 @@ logs/
 .idea/
 notes/
 .worktrees/
+
+# Rust
+/target
+Cargo.lock
