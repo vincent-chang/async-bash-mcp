@@ -1,8 +1,14 @@
 # async-bash-mcp
 
-[![Rust](https://github.com/xhuw/async-bash-mcp/actions/workflows/test.yaml/badge.svg)](https://github.com/xhuw/async-bash-mcp/actions/workflows/test.yaml)
+[![Rust](https://github.com/vincent-chang/async-bash-mcp/actions/workflows/test.yaml/badge.svg)](https://github.com/vincent-chang/async-bash-mcp/actions/workflows/test.yaml)
+
+English | [中文](README.zh-CN.md)
 
 An MCP server for spawning and managing bash commands asynchronously. Run multiple shell commands in parallel and check their progress independently.
+
+## Background
+
+This project is a Rust rewrite of the original Python implementation [async-bash-mcp](https://github.com/xhuw/async-bash-mcp), built using [opencode](https://opencode.ai/) + [oh-my-opencode](https://github.com/anthropics/oh-my-opencode) inside [OpenChamber](https://github.com/btriapitsyn/openchamber). As a local-type MCP server, Rust offers lower startup overhead compared to Python, making it a better fit for tools that are launched on every session.
 
 ## Usage with opencode
 
@@ -23,7 +29,7 @@ Add to your `opencode.json` config to replace the bash tool with async-bash-mcp:
   }
 }
 ```
-Download the latest binary from [GitHub Releases](https://github.com/xhuw/async-bash-mcp/releases) or build from source with `cargo build --release`.
+Download the latest binary from [GitHub Releases](https://github.com/vincent-chang/async-bash-mcp/releases) or build from source with `cargo build --release`.
 
 
 Then use commands like:
@@ -68,11 +74,9 @@ This tool is designed to replace opencode's bash tool for any scenario involving
 
 ## Installation
 
-Download the pre-built binary from [GitHub Releases](https://github.com/xhuw/async-bash-mcp/releases), or build from source:
+Download the pre-built binary from [GitHub Releases](https://github.com/vincent-chang/async-bash-mcp/releases), or build from source:
 
 ```bash
 cargo build --release
 # Binary will be at: target/release/async-bash-mcp
 ```
-
-The original Python implementation is preserved in the `legacy/` directory.

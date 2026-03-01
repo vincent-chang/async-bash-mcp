@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION=${1:?"Usage: ./release <version>  (e.g. ./release 0.2.0)"}
+VERSION=${1:?"Usage: ./scripts/release.sh <version>  (e.g. ./scripts/release.sh 0.2.0)"}
 
 # Validate semver format
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

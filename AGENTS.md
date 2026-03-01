@@ -28,7 +28,6 @@ Source layout
 Agents operating here
 
 - All 3 MCP tools: spawn, poll, list_processes
-- Python implementation preserved in legacy/ directory
 - Store all notes about progress in the notes/ directory
 - Plans and notepads in .sisyphus/
 

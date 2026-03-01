@@ -89,3 +89,5 @@ notes/
 # Rust
 /target
 Cargo.lock
+.ruff_cache/
+.sisyphus/
