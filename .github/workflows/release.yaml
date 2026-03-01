@@ -8,11 +8,15 @@ jobs:
   build:
     strategy:
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
+        include:
+          - target: x86_64-unknown-linux-gnu
+            artifact_name: async-bash-mcp-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            artifact_name: async-bash-mcp-linux-arm64
+          - target: x86_64-apple-darwin
+            artifact_name: async-bash-mcp-macos-x86_64
+          - target: aarch64-apple-darwin
+            artifact_name: async-bash-mcp-macos-arm64
     runs-on: ${{ contains(matrix.target, 'apple') && 'macos-latest' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +33,9 @@ jobs:
           else
             cargo build --release --target ${{ matrix.target }}
           fi
+      - name: Rename binary
+        run: cp target/${{ matrix.target }}/release/async-bash-mcp ${{ matrix.artifact_name }}
       - name: Upload binary
         uses: softprops/action-gh-release@v1
         with:
-          files: target/${{ matrix.target }}/release/async-bash-mcp
+          files: ${{ matrix.artifact_name }}
