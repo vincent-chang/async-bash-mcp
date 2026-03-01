@@ -8,7 +8,7 @@
 
 ## 背景
 
-本项目是对原 Python 实现 [async-bash-mcp](https://github.com/xhuw/async-bash-mcp) 的 Rust 改写，使用 [opencode](https://opencode.ai/) + [oh-my-opencode](https://github.com/anthropics/oh-my-opencode) 在 [OpenChamber](https://github.com/btriapitsyn/openchamber) 中完成。作为一个 local 类型的 MCP 服务器，Rust 的启动开销比 Python 更小，更适合每次会话都需要启动的工具场景。
+本项目是对原 Python 实现 [async-bash-mcp](https://github.com/xhuw/async-bash-mcp) 的 Rust 改写，使用 [opencode](https://opencode.ai/) + [oh-my-opencode](https://github.com/code-yeongyu/oh-my-opencode) 在 [OpenChamber](https://github.com/btriapitsyn/openchamber) 中完成。作为一个 local 类型的 MCP 服务器，Rust 的启动开销比 Python 更小，更适合每次会话都需要启动的工具场景。
 
 ## 在 opencode 中使用
 
