@@ -34,8 +34,8 @@ jobs:
             cargo build --release --target ${{ matrix.target }}
           fi
       - name: Package binary
-        run: zip ${{ matrix.artifact_name }}.zip -j target/${{ matrix.target }}/release/async-bash-mcp
+        run: tar -czf ${{ matrix.artifact_name }}.tar.gz -C target/${{ matrix.target }}/release async-bash-mcp
       - name: Upload binary
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ matrix.artifact_name }}.zip
+          files: ${{ matrix.artifact_name }}.tar.gz
