@@ -1,6 +1,7 @@
 # async-bash-mcp
 
-[![Rust](https://github.com/vincent-chang/async-bash-mcp/actions/workflows/test.yaml/badge.svg)](https://github.com/vincent-chang/async-bash-mcp/actions/workflows/test.yaml)
+[![License](https://img.shields.io/badge/license-MIT-blue)](https://github.com/vincent-chang/async-bash-mcp/blob/main/LICENSE)
+[![Test](https://github.com/vincent-chang/async-bash-mcp/actions/workflows/test.yaml/badge.svg)](https://github.com/vincent-chang/async-bash-mcp/actions/workflows/test.yaml)
 
 [English](README.md) | 中文
 
