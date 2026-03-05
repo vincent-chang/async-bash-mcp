@@ -8,7 +8,8 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
-    let service = AsyncBashServer::new().serve(stdio()).await?;
+    let logging_enabled = std::env::args().any(|a| a == "--log");
+    let service = AsyncBashServer::new(logging_enabled).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }

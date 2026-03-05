@@ -1,3 +1,4 @@
+use crate::logging::{LogEvent, ProcessLogger};
 use crate::validation::{validate_command, validate_cwd};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -21,11 +22,13 @@ pub struct ProcessInfo {
     finished: Arc<AtomicBool>,
     exit_code: Arc<Mutex<Option<i32>>>,
     notify: Arc<Notify>,
+    logger: Arc<tokio::sync::Mutex<Option<ProcessLogger>>>,
 }
 
 pub struct ProcessManager {
     processes: HashMap<u32, ProcessInfo>,
     next_id: Arc<AtomicU32>,
+    logging_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -67,10 +70,11 @@ fn round_ms(secs: f64) -> u64 {
 }
 
 impl ProcessManager {
-    pub fn new() -> Self {
+    pub fn new(logging_enabled: bool) -> Self {
         ProcessManager {
             processes: HashMap::new(),
             next_id: Arc::new(AtomicU32::new(1)),
+            logging_enabled,
         }
     }
 
@@ -102,6 +106,18 @@ impl ProcessManager {
         let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
         let notify = Arc::new(Notify::new());
 
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+
+        // Create logger if enabled
+        let logger_opt: Option<ProcessLogger> = if self.logging_enabled {
+            ProcessLogger::new(id, command, cwd).await
+        } else {
+            None
+        };
+        let logger_arc = Arc::new(tokio::sync::Mutex::new(logger_opt));
+        let logger_for_stdout = logger_arc.clone();
+        let logger_for_stderr = logger_arc.clone();
+        let logger_for_completion = logger_arc.clone();
         // Background stdout reader
         let stdout_buf_clone = stdout_buffer.clone();
         let stdout_task = tokio::spawn(async move {
@@ -112,6 +128,12 @@ impl ProcessManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                        {
+                            let guard = logger_for_stdout.lock().await;
+                            if let Some(ref l) = *guard {
+                                l.log(LogEvent::Stdout, text.clone());
+                            }
+                        }
                         stdout_buf_clone.lock().await.push_str(&text);
                     }
                     Err(_) => break,
@@ -129,6 +151,12 @@ impl ProcessManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                        {
+                            let guard = logger_for_stderr.lock().await;
+                            if let Some(ref l) = *guard {
+                                l.log(LogEvent::Stderr, text.clone());
+                            }
+                        }
                         stderr_buf_clone.lock().await.push_str(&text);
                     }
                     Err(_) => break,
@@ -144,12 +172,22 @@ impl ProcessManager {
             let _ = stdout_task.await;
             let _ = stderr_task.await;
             let code = child.wait().await.ok().and_then(|s| s.code());
+            {
+                let guard = logger_for_completion.lock().await;
+                if let Some(ref l) = *guard {
+                    match code {
+                        Some(c) => l.log(LogEvent::Exit, format!("code={}", c)),
+                        None => l.log(
+                            LogEvent::Error,
+                            "unexpected termination: no exit code".to_string(),
+                        ),
+                    }
+                }
+            }
             *exit_code_clone.lock().await = code;
             finished_clone.store(true, Ordering::SeqCst);
             notify_clone.notify_waiters();
         });
-
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
         self.processes.insert(
             id,
@@ -167,6 +205,7 @@ impl ProcessManager {
                 finished,
                 exit_code,
                 notify,
+                logger: logger_arc,
             },
         );
 
@@ -192,6 +231,7 @@ impl ProcessManager {
         let notify = self.processes[&process_id].notify.clone();
         let finished = self.processes[&process_id].finished.clone();
         let exit_code_arc = self.processes[&process_id].exit_code.clone();
+        let logger_for_signal = self.processes[&process_id].logger.clone();
 
         if terminate && !finished.load(Ordering::SeqCst) {
             if let Some(pid) = self.processes[&process_id].child_pid {
@@ -199,6 +239,12 @@ impl ProcessManager {
                     nix::unistd::Pid::from_raw(pid as i32),
                     nix::sys::signal::Signal::SIGTERM,
                 );
+            }
+            {
+                let guard = logger_for_signal.lock().await;
+                if let Some(ref l) = *guard {
+                    l.log(LogEvent::Signal, "SIGTERM sent".to_string());
+                }
             }
 
             let timed_out = tokio::time::timeout(Duration::from_secs(5), notify.notified())
@@ -211,6 +257,15 @@ impl ProcessManager {
                         nix::unistd::Pid::from_raw(pid as i32),
                         nix::sys::signal::Signal::SIGKILL,
                     );
+                }
+                {
+                    let guard = logger_for_signal.lock().await;
+                    if let Some(ref l) = *guard {
+                        l.log(
+                            LogEvent::Signal,
+                            "SIGKILL sent (SIGTERM timed out)".to_string(),
+                        );
+                    }
                 }
                 let _ = tokio::time::timeout(Duration::from_millis(500), notify.notified()).await;
                 if !finished.load(Ordering::SeqCst) {
@@ -331,13 +386,44 @@ impl ProcessManager {
 
 impl Default for ProcessManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::*;
+
+    /// Helper: cleanup env var after test
+    struct EnvGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn new(key: &str) -> Self {
+            let original = std::env::var(key).ok();
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(val) = &self.original {
+                std::env::set_var(&self.key, val);
+            } else {
+                std::env::remove_var(&self.key);
+            }
+        }
+    }
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_utils::env_lock()
+    }
 
     #[test]
     fn test_last_n_lines_basic() {
@@ -356,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_simple_command() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("echo hello", None).await.unwrap();
         assert!(id > 0);
         let list = pm.list_processes();
@@ -365,7 +451,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_processes() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id1 = pm.spawn_process("echo a", None).await.unwrap();
         let id2 = pm.spawn_process("echo b", None).await.unwrap();
         assert_ne!(id1, id2);
@@ -376,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_output() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("echo hello", None).await.unwrap();
         let result = pm.poll_process(id, 2000, false, None).await.unwrap();
         assert!(
@@ -390,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incremental_output() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm
             .spawn_process("echo first && sleep 0.2 && echo second", None)
             .await
@@ -412,7 +498,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let tmp_path = tmp.path().to_str().unwrap().to_string();
 
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("pwd", Some(&tmp_path)).await.unwrap();
         let result = pm.poll_process(id, 2000, false, None).await.unwrap();
         let out = result.stdout.trim().to_string();
@@ -425,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_terminate() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("sleep 10", None).await.unwrap();
         let result = pm.poll_process(id, 8000, true, None).await.unwrap();
         assert!(
@@ -436,7 +522,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_terminate_fast() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("sleep 10", None).await.unwrap();
         let start = Instant::now();
         let _ = pm.poll_process(id, 8000, true, None).await.unwrap();
@@ -450,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_timeout() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("sleep 5", None).await.unwrap();
         let start = Instant::now();
         let result = pm.poll_process(id, 200, false, None).await.unwrap();
@@ -465,7 +551,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_accessed() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("echo done", None).await.unwrap();
         let mut found_finished = false;
         for _ in 0..10 {
@@ -482,7 +568,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_error_invalid_id() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let result = pm.poll_process(999999, 100, false, None).await;
         assert!(result.is_err());
         let msg = result.unwrap_err();
@@ -491,7 +577,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stderr_capture() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("echo err >&2", None).await.unwrap();
         let result = pm.poll_process(id, 2000, false, None).await.unwrap();
         assert!(result.stderr.contains("err"), "stderr: {:?}", result.stderr);
@@ -499,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_processes() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let mut ids = Vec::new();
         for i in 0..5 {
             let id = pm
@@ -514,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_long_output() {
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("seq 1 100", None).await.unwrap();
         let result = pm.poll_process(id, 5000, false, None).await.unwrap();
         assert!(result.stdout.contains("100"), "stdout: {:?}", result.stdout);
@@ -530,7 +616,7 @@ mod tests {
             messages_clone.lock().unwrap().push(msg);
         });
 
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("echo hello", None).await.unwrap();
         let _ = pm.poll_process(id, 1500, false, Some(cb)).await.unwrap();
 
@@ -566,7 +652,7 @@ mod tests {
             calls_clone.lock().unwrap().push(ms);
         });
 
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("sleep 2", None).await.unwrap();
         let _ = pm.poll_process(id, 700, false, Some(cb)).await.unwrap();
 
@@ -587,7 +673,7 @@ mod tests {
             *last_ms_clone.lock().unwrap() = ms;
         });
 
-        let mut pm = ProcessManager::new();
+        let mut pm = ProcessManager::new(false);
         let id = pm.spawn_process("sleep 0.3", None).await.unwrap();
         let _ = pm.poll_process(id, 2000, false, Some(cb)).await.unwrap();
 
@@ -598,5 +684,164 @@ mod tests {
             reported_ms
         );
         assert!(reported_ms > 0, "elapsed should be >0");
+    }
+
+    #[tokio::test]
+    async fn test_logging_creates_log_file() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true); // logging_enabled = true
+        let id = pm.spawn_process("echo hello", None).await.unwrap();
+        let _ = pm.poll_process(id, 2000, false, None).await.unwrap();
+
+        // A log file for this process should exist
+        let entries: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let s = name.to_string_lossy();
+                s.ends_with(".log")
+            })
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "Expected at least one .log file in {:?}",
+            tmp_path
+        );
+    }
+
+    #[tokio::test]
+    async fn test_logging_records_stdout() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true);
+        let id = pm
+            .spawn_process("echo hello_stdout_marker", None)
+            .await
+            .unwrap();
+        let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
+        // Give writer task time to flush
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(!log_files.is_empty(), "No log files found");
+
+        let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
+        assert!(
+            content.contains("[STDOUT]"),
+            "Expected [STDOUT] in log, got: {}",
+            content
+        );
+        assert!(
+            content.contains("hello_stdout_marker"),
+            "Expected output in log, got: {}",
+            content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_logging_records_stderr() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true);
+        let id = pm
+            .spawn_process("echo hello_stderr_marker >&2", None)
+            .await
+            .unwrap();
+        let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(!log_files.is_empty(), "No log files found");
+
+        let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
+        assert!(
+            content.contains("[STDERR]"),
+            "Expected [STDERR] in log, got: {}",
+            content
+        );
+        assert!(
+            content.contains("hello_stderr_marker"),
+            "Expected stderr in log, got: {}",
+            content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_logging_records_exit() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true);
+        let id = pm.spawn_process("exit 0", None).await.unwrap();
+        let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(!log_files.is_empty(), "No log files found");
+
+        let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
+        assert!(
+            content.contains("[EXIT]"),
+            "Expected [EXIT] in log, got: {}",
+            content
+        );
+        assert!(
+            content.contains("code="),
+            "Expected 'code=' in log, got: {}",
+            content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_logging_disabled_no_file() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(false); // logging_enabled = false
+        let id = pm.spawn_process("echo no_log", None).await.unwrap();
+        let _ = pm.poll_process(id, 2000, false, None).await.unwrap();
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(
+            log_files.is_empty(),
+            "Expected NO log files when logging disabled, found: {:?}",
+            log_files
+        );
     }
 }

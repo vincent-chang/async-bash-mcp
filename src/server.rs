@@ -75,15 +75,15 @@ pub struct AsyncBashServer {
 
 impl Default for AsyncBashServer {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 #[tool_router]
 impl AsyncBashServer {
-    pub fn new() -> Self {
+    pub fn new(logging_enabled: bool) -> Self {
         Self {
-            process_manager: Arc::new(Mutex::new(ProcessManager::new())),
+            process_manager: Arc::new(Mutex::new(ProcessManager::new(logging_enabled))),
             tool_router: Self::tool_router(),
         }
     }
@@ -233,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_tool() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let mut pm = server.process_manager.lock().await;
         let id = pm.spawn_process("echo hello", None).await.unwrap();
         assert!(id > 0);
@@ -241,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_with_cwd() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let mut pm = server.process_manager.lock().await;
         let result = pm.spawn_process("echo cwd_test", Some("/tmp")).await;
         assert!(result.is_ok());
@@ -249,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tool() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let mut pm = server.process_manager.lock().await;
         let id = pm.spawn_process("sleep 10", None).await.unwrap();
         let list = pm.list_processes();
@@ -258,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_tool() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let id = {
             let mut pm = server.process_manager.lock().await;
             pm.spawn_process("echo hello", None).await.unwrap()
@@ -277,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_with_wait() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let id = {
             let mut pm = server.process_manager.lock().await;
             pm.spawn_process("sleep 0.1 && echo done", None)
@@ -292,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_with_terminate() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let id = {
             let mut pm = server.process_manager.lock().await;
             pm.spawn_process("sleep 10", None).await.unwrap()
@@ -304,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_invalid_id() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let mut pm = server.process_manager.lock().await;
         let result = pm.poll_process(99999, 1000, false, None).await;
         assert!(result.is_err(), "should error for unknown process id");
@@ -324,7 +324,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_detection() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let id = {
             let mut pm = server.process_manager.lock().await;
             pm.spawn_process("echo $0", None).await.unwrap()
@@ -341,8 +341,8 @@ mod tests {
     #[tokio::test]
     async fn test_session_isolation() {
         // Two independent server instances should have independent ProcessManagers
-        let server1 = AsyncBashServer::new();
-        let server2 = AsyncBashServer::new();
+        let server1 = AsyncBashServer::new(false);
+        let server2 = AsyncBashServer::new(false);
         let id1 = {
             let mut pm1 = server1.process_manager.lock().await;
             pm1.spawn_process("echo s1", None).await.unwrap()
@@ -358,7 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dangerous_command_rejected() {
-        let server = AsyncBashServer::new();
+        let server = AsyncBashServer::new(false);
         let mut pm = server.process_manager.lock().await;
         let result = pm.spawn_process("rm -rf /", None).await;
         assert!(result.is_err(), "dangerous command should be rejected");
