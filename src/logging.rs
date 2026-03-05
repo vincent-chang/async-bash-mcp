@@ -139,7 +139,6 @@ mod tests {
     use std::env;
     use std::fs;
     use std::io::Read;
-    use std::sync::{Mutex, OnceLock};
 
     /// Helper: cleanup env var after test
     struct EnvGuard {
@@ -168,8 +167,7 @@ mod tests {
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        crate::test_utils::env_lock()
     }
 
     #[test]

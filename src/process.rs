@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{Mutex, Notify};
+use crate::logging::{LogEvent, ProcessLogger};
 
 pub struct ProcessInfo {
     pub id: u32,
@@ -104,6 +105,18 @@ impl ProcessManager {
         let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
         let notify = Arc::new(Notify::new());
 
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+
+        // Create logger if enabled
+        let logger_opt: Option<ProcessLogger> = if self.logging_enabled {
+            ProcessLogger::new(id, command, cwd).await
+        } else {
+            None
+        };
+        let logger_arc = Arc::new(tokio::sync::Mutex::new(logger_opt));
+        let logger_for_stdout = logger_arc.clone();
+        let logger_for_stderr = logger_arc.clone();
+        let logger_for_completion = logger_arc.clone();
         // Background stdout reader
         let stdout_buf_clone = stdout_buffer.clone();
         let stdout_task = tokio::spawn(async move {
@@ -114,6 +127,12 @@ impl ProcessManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                        {
+                            let guard = logger_for_stdout.lock().await;
+                            if let Some(ref l) = *guard {
+                                l.log(LogEvent::Stdout, text.clone());
+                            }
+                        }
                         stdout_buf_clone.lock().await.push_str(&text);
                     }
                     Err(_) => break,
@@ -131,6 +150,12 @@ impl ProcessManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                        {
+                            let guard = logger_for_stderr.lock().await;
+                            if let Some(ref l) = *guard {
+                                l.log(LogEvent::Stderr, text.clone());
+                            }
+                        }
                         stderr_buf_clone.lock().await.push_str(&text);
                     }
                     Err(_) => break,
@@ -146,12 +171,21 @@ impl ProcessManager {
             let _ = stdout_task.await;
             let _ = stderr_task.await;
             let code = child.wait().await.ok().and_then(|s| s.code());
+            {
+                let guard = logger_for_completion.lock().await;
+                if let Some(ref l) = *guard {
+                    match code {
+                        Some(c) => l.log(LogEvent::Exit, format!("code={}", c)),
+                        None => l.log(LogEvent::Error, "unexpected termination: no exit code".to_string()),
+                    }
+                }
+            }
             *exit_code_clone.lock().await = code;
             finished_clone.store(true, Ordering::SeqCst);
             notify_clone.notify_waiters();
         });
 
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+
 
         self.processes.insert(
             id,
@@ -340,7 +374,7 @@ impl Default for ProcessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use super::*;
 
     /// Helper: cleanup env var after test
     struct EnvGuard {
@@ -369,8 +403,7 @@ mod tests {
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        crate::test_utils::env_lock()
     }
 
     #[test]
