@@ -86,6 +86,7 @@ impl ProcessManager {
 
         let mut cmd = tokio::process::Command::new(&shell);
         cmd.args(["-c", command])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
