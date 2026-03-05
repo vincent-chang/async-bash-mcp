@@ -340,6 +340,38 @@ impl Default for ProcessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Helper: cleanup env var after test
+    struct EnvGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn new(key: &str) -> Self {
+            let original = std::env::var(key).ok();
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(val) = &self.original {
+                std::env::set_var(&self.key, val);
+            } else {
+                std::env::remove_var(&self.key);
+            }
+        }
+    }
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn test_last_n_lines_basic() {
@@ -600,5 +632,126 @@ mod tests {
             reported_ms
         );
         assert!(reported_ms > 0, "elapsed should be >0");
+    }
+
+    #[tokio::test]
+    async fn test_logging_creates_log_file() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true); // logging_enabled = true
+        let id = pm.spawn_process("echo hello", None).await.unwrap();
+        let _ = pm.poll_process(id, 2000, false, None).await.unwrap();
+
+        // A log file for this process should exist
+        let entries: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let s = name.to_string_lossy();
+                s.ends_with(".log")
+            })
+            .collect();
+        assert!(!entries.is_empty(), "Expected at least one .log file in {:?}", tmp_path);
+    }
+
+    #[tokio::test]
+    async fn test_logging_records_stdout() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true);
+        let id = pm.spawn_process("echo hello_stdout_marker", None).await.unwrap();
+        let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
+        // Give writer task time to flush
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(!log_files.is_empty(), "No log files found");
+
+        let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
+        assert!(content.contains("[STDOUT]"), "Expected [STDOUT] in log, got: {}", content);
+        assert!(content.contains("hello_stdout_marker"), "Expected output in log, got: {}", content);
+    }
+
+    #[tokio::test]
+    async fn test_logging_records_stderr() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true);
+        let id = pm.spawn_process("echo hello_stderr_marker >&2", None).await.unwrap();
+        let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(!log_files.is_empty(), "No log files found");
+
+        let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
+        assert!(content.contains("[STDERR]"), "Expected [STDERR] in log, got: {}", content);
+        assert!(content.contains("hello_stderr_marker"), "Expected stderr in log, got: {}", content);
+    }
+
+    #[tokio::test]
+    async fn test_logging_records_exit() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(true);
+        let id = pm.spawn_process("exit 0", None).await.unwrap();
+        let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(!log_files.is_empty(), "No log files found");
+
+        let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
+        assert!(content.contains("[EXIT]"), "Expected [EXIT] in log, got: {}", content);
+        assert!(content.contains("code="), "Expected 'code=' in log, got: {}", content);
+    }
+
+    #[tokio::test]
+    async fn test_logging_disabled_no_file() {
+        let _lock = env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
+        std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
+
+        let mut pm = ProcessManager::new(false); // logging_enabled = false
+        let id = pm.spawn_process("echo no_log", None).await.unwrap();
+        let _ = pm.poll_process(id, 2000, false, None).await.unwrap();
+
+        let log_files: Vec<_> = std::fs::read_dir(&tmp_path)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
+            .collect();
+        assert!(log_files.is_empty(), "Expected NO log files when logging disabled, found: {:?}", log_files);
     }
 }
