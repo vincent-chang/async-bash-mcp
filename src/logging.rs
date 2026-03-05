@@ -132,7 +132,6 @@ fn format_entry(entry: &LogEntry) -> String {
     format!("[{}] [{}] {}", ts, event_str, entry.content)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,8 +176,11 @@ mod tests {
         env::remove_var("ASYNC_BASH_LOG_DIR");
         let log_dir = get_log_dir();
         let path_str = log_dir.to_string_lossy();
-        assert!(path_str.ends_with("async-bash-mcp/logs") || path_str.ends_with("async-bash-mcp\\logs"),
-            "Expected path to end with 'async-bash-mcp/logs', got: {}", path_str);
+        assert!(
+            path_str.ends_with("async-bash-mcp/logs") || path_str.ends_with("async-bash-mcp\\logs"),
+            "Expected path to end with 'async-bash-mcp/logs', got: {}",
+            path_str
+        );
     }
 
     #[test]
@@ -187,8 +189,11 @@ mod tests {
         let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
         env::set_var("ASYNC_BASH_LOG_DIR", "/tmp/custom-logs");
         let log_dir = get_log_dir();
-        assert_eq!(log_dir.to_string_lossy(), "/tmp/custom-logs",
-            "Expected log_dir to match env var");
+        assert_eq!(
+            log_dir.to_string_lossy(),
+            "/tmp/custom-logs",
+            "Expected log_dir to match env var"
+        );
     }
 
     #[tokio::test]
@@ -218,7 +223,10 @@ mod tests {
             })
             .collect();
 
-        assert!(!log_files.is_empty(), "Expected log file matching process_12345_*.log pattern");
+        assert!(
+            !log_files.is_empty(),
+            "Expected log file matching process_12345_*.log pattern"
+        );
     }
 
     #[tokio::test]
@@ -239,13 +247,11 @@ mod tests {
 
         // read log file and verify [SPAWN] appears
         let entries = fs::read_dir(&tmp_path).expect("Failed to read temp dir");
-        let log_file = entries
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                name_str.starts_with("process_22222_") && name_str.ends_with(".log")
-            });
+        let log_file = entries.filter_map(|e| e.ok()).find(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("process_22222_") && name_str.ends_with(".log")
+        });
 
         assert!(log_file.is_some(), "Log file not found");
         let log_path = log_file.unwrap().path();
@@ -255,7 +261,11 @@ mod tests {
             .read_to_string(&mut content)
             .expect("Failed to read log file");
 
-        assert!(content.contains("[SPAWN]"), "Expected [SPAWN] in log file, got: {}", content);
+        assert!(
+            content.contains("[SPAWN]"),
+            "Expected [SPAWN] in log file, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -274,13 +284,11 @@ mod tests {
         }
 
         let entries = fs::read_dir(&tmp_path).expect("Failed to read temp dir");
-        let log_file = entries
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                name_str.starts_with("process_33333_") && name_str.ends_with(".log")
-            });
+        let log_file = entries.filter_map(|e| e.ok()).find(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("process_33333_") && name_str.ends_with(".log")
+        });
 
         let log_path = log_file.unwrap().path();
         let mut content = String::new();
@@ -289,7 +297,11 @@ mod tests {
             .read_to_string(&mut content)
             .expect("Failed to read log file");
 
-        assert!(content.contains("[STDOUT]"), "Expected [STDOUT] in log file, got: {}", content);
+        assert!(
+            content.contains("[STDOUT]"),
+            "Expected [STDOUT] in log file, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -308,13 +320,11 @@ mod tests {
         }
 
         let entries = fs::read_dir(&tmp_path).expect("Failed to read temp dir");
-        let log_file = entries
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                name_str.starts_with("process_44444_") && name_str.ends_with(".log")
-            });
+        let log_file = entries.filter_map(|e| e.ok()).find(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("process_44444_") && name_str.ends_with(".log")
+        });
 
         let log_path = log_file.unwrap().path();
         let mut content = String::new();
@@ -323,7 +333,11 @@ mod tests {
             .read_to_string(&mut content)
             .expect("Failed to read log file");
 
-        assert!(content.contains("[STDERR]"), "Expected [STDERR] in log file, got: {}", content);
+        assert!(
+            content.contains("[STDERR]"),
+            "Expected [STDERR] in log file, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -342,13 +356,11 @@ mod tests {
         }
 
         let entries = fs::read_dir(&tmp_path).expect("Failed to read temp dir");
-        let log_file = entries
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                name_str.starts_with("process_55555_") && name_str.ends_with(".log")
-            });
+        let log_file = entries.filter_map(|e| e.ok()).find(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("process_55555_") && name_str.ends_with(".log")
+        });
 
         let log_path = log_file.unwrap().path();
         let mut content = String::new();
@@ -357,8 +369,16 @@ mod tests {
             .read_to_string(&mut content)
             .expect("Failed to read log file");
 
-        assert!(content.contains("[EXIT]"), "Expected [EXIT] in log file, got: {}", content);
-        assert!(content.contains("code=0"), "Expected 'code=0' in log file, got: {}", content);
+        assert!(
+            content.contains("[EXIT]"),
+            "Expected [EXIT] in log file, got: {}",
+            content
+        );
+        assert!(
+            content.contains("code=0"),
+            "Expected 'code=0' in log file, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -377,13 +397,11 @@ mod tests {
         }
 
         let entries = fs::read_dir(&tmp_path).expect("Failed to read temp dir");
-        let log_file = entries
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                name_str.starts_with("process_66666_") && name_str.ends_with(".log")
-            });
+        let log_file = entries.filter_map(|e| e.ok()).find(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("process_66666_") && name_str.ends_with(".log")
+        });
 
         let log_path = log_file.unwrap().path();
         let mut content = String::new();
@@ -392,7 +410,11 @@ mod tests {
             .read_to_string(&mut content)
             .expect("Failed to read log file");
 
-        assert!(content.contains("[ERROR]"), "Expected [ERROR] in log file, got: {}", content);
+        assert!(
+            content.contains("[ERROR]"),
+            "Expected [ERROR] in log file, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -411,13 +433,11 @@ mod tests {
         }
 
         let entries = fs::read_dir(&tmp_path).expect("Failed to read temp dir");
-        let log_file = entries
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                name_str.starts_with("process_77777_") && name_str.ends_with(".log")
-            });
+        let log_file = entries.filter_map(|e| e.ok()).find(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("process_77777_") && name_str.ends_with(".log")
+        });
 
         let log_path = log_file.unwrap().path();
         let mut content = String::new();
@@ -426,7 +446,11 @@ mod tests {
             .read_to_string(&mut content)
             .expect("Failed to read log file");
 
-        assert!(content.contains("[SIGNAL]"), "Expected [SIGNAL] in log file, got: {}", content);
+        assert!(
+            content.contains("[SIGNAL]"),
+            "Expected [SIGNAL] in log file, got: {}",
+            content
+        );
     }
 
     #[test]
@@ -440,10 +464,21 @@ mod tests {
         let formatted = format_entry(&entry);
 
         // Should contain timestamp, event type, and content
-        assert!(formatted.contains("[SPAWN]"), "Expected [SPAWN] in formatted output, got: {}", formatted);
-        assert!(formatted.contains("test command"), "Expected 'test command' in formatted output, got: {}", formatted);
+        assert!(
+            formatted.contains("[SPAWN]"),
+            "Expected [SPAWN] in formatted output, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("test command"),
+            "Expected 'test command' in formatted output, got: {}",
+            formatted
+        );
         // Verify format includes timestamp pattern (YYYY-MM-DD HH:MM:SS)
-        assert!(formatted.len() > 10, "Expected non-trivial formatted output");
+        assert!(
+            formatted.len() > 10,
+            "Expected non-trivial formatted output"
+        );
     }
 
     #[tokio::test]
@@ -479,20 +514,22 @@ mod tests {
         }
 
         let entries = fs::read_dir(&tmp_path).expect("Failed to read temp dir");
-        let log_file = entries
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                name_str.starts_with("process_99999_") && name_str.ends_with(".log")
-            });
+        let log_file = entries.filter_map(|e| e.ok()).find(|e| {
+            let name = e.file_name();
+            let name_str = name.to_string_lossy();
+            name_str.starts_with("process_99999_") && name_str.ends_with(".log")
+        });
 
         if let Some(lf) = log_file {
             let log_path = lf.path();
             if let Ok(metadata) = fs::metadata(&log_path) {
                 let size = metadata.len() as usize;
                 // File size should be at most 100 + some buffer for [TRUNCATED] line
-                assert!(size <= 200, "Log file size {} exceeds reasonable limit", size);
+                assert!(
+                    size <= 200,
+                    "Log file size {} exceeds reasonable limit",
+                    size
+                );
             }
         }
     }

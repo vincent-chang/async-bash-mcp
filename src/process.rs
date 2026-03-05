@@ -1,3 +1,4 @@
+use crate::logging::{LogEvent, ProcessLogger};
 use crate::validation::{validate_command, validate_cwd};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -6,7 +7,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{Mutex, Notify};
-use crate::logging::{LogEvent, ProcessLogger};
 
 pub struct ProcessInfo {
     pub id: u32,
@@ -22,6 +22,7 @@ pub struct ProcessInfo {
     finished: Arc<AtomicBool>,
     exit_code: Arc<Mutex<Option<i32>>>,
     notify: Arc<Notify>,
+    logger: Arc<tokio::sync::Mutex<Option<ProcessLogger>>>,
 }
 
 pub struct ProcessManager {
@@ -176,7 +177,10 @@ impl ProcessManager {
                 if let Some(ref l) = *guard {
                     match code {
                         Some(c) => l.log(LogEvent::Exit, format!("code={}", c)),
-                        None => l.log(LogEvent::Error, "unexpected termination: no exit code".to_string()),
+                        None => l.log(
+                            LogEvent::Error,
+                            "unexpected termination: no exit code".to_string(),
+                        ),
                     }
                 }
             }
@@ -184,8 +188,6 @@ impl ProcessManager {
             finished_clone.store(true, Ordering::SeqCst);
             notify_clone.notify_waiters();
         });
-
-
 
         self.processes.insert(
             id,
@@ -203,6 +205,7 @@ impl ProcessManager {
                 finished,
                 exit_code,
                 notify,
+                logger: logger_arc,
             },
         );
 
@@ -228,6 +231,7 @@ impl ProcessManager {
         let notify = self.processes[&process_id].notify.clone();
         let finished = self.processes[&process_id].finished.clone();
         let exit_code_arc = self.processes[&process_id].exit_code.clone();
+        let logger_for_signal = self.processes[&process_id].logger.clone();
 
         if terminate && !finished.load(Ordering::SeqCst) {
             if let Some(pid) = self.processes[&process_id].child_pid {
@@ -235,6 +239,12 @@ impl ProcessManager {
                     nix::unistd::Pid::from_raw(pid as i32),
                     nix::sys::signal::Signal::SIGTERM,
                 );
+            }
+            {
+                let guard = logger_for_signal.lock().await;
+                if let Some(ref l) = *guard {
+                    l.log(LogEvent::Signal, "SIGTERM sent".to_string());
+                }
             }
 
             let timed_out = tokio::time::timeout(Duration::from_secs(5), notify.notified())
@@ -247,6 +257,15 @@ impl ProcessManager {
                         nix::unistd::Pid::from_raw(pid as i32),
                         nix::sys::signal::Signal::SIGKILL,
                     );
+                }
+                {
+                    let guard = logger_for_signal.lock().await;
+                    if let Some(ref l) = *guard {
+                        l.log(
+                            LogEvent::Signal,
+                            "SIGKILL sent (SIGTERM timed out)".to_string(),
+                        );
+                    }
                 }
                 let _ = tokio::time::timeout(Duration::from_millis(500), notify.notified()).await;
                 if !finished.load(Ordering::SeqCst) {
@@ -689,7 +708,11 @@ mod tests {
                 s.ends_with(".log")
             })
             .collect();
-        assert!(!entries.is_empty(), "Expected at least one .log file in {:?}", tmp_path);
+        assert!(
+            !entries.is_empty(),
+            "Expected at least one .log file in {:?}",
+            tmp_path
+        );
     }
 
     #[tokio::test]
@@ -701,7 +724,10 @@ mod tests {
         std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
 
         let mut pm = ProcessManager::new(true);
-        let id = pm.spawn_process("echo hello_stdout_marker", None).await.unwrap();
+        let id = pm
+            .spawn_process("echo hello_stdout_marker", None)
+            .await
+            .unwrap();
         let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
         // Give writer task time to flush
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
@@ -714,8 +740,16 @@ mod tests {
         assert!(!log_files.is_empty(), "No log files found");
 
         let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
-        assert!(content.contains("[STDOUT]"), "Expected [STDOUT] in log, got: {}", content);
-        assert!(content.contains("hello_stdout_marker"), "Expected output in log, got: {}", content);
+        assert!(
+            content.contains("[STDOUT]"),
+            "Expected [STDOUT] in log, got: {}",
+            content
+        );
+        assert!(
+            content.contains("hello_stdout_marker"),
+            "Expected output in log, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -727,7 +761,10 @@ mod tests {
         std::env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
 
         let mut pm = ProcessManager::new(true);
-        let id = pm.spawn_process("echo hello_stderr_marker >&2", None).await.unwrap();
+        let id = pm
+            .spawn_process("echo hello_stderr_marker >&2", None)
+            .await
+            .unwrap();
         let _ = pm.poll_process(id, 3000, false, None).await.unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
@@ -739,8 +776,16 @@ mod tests {
         assert!(!log_files.is_empty(), "No log files found");
 
         let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
-        assert!(content.contains("[STDERR]"), "Expected [STDERR] in log, got: {}", content);
-        assert!(content.contains("hello_stderr_marker"), "Expected stderr in log, got: {}", content);
+        assert!(
+            content.contains("[STDERR]"),
+            "Expected [STDERR] in log, got: {}",
+            content
+        );
+        assert!(
+            content.contains("hello_stderr_marker"),
+            "Expected stderr in log, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -764,8 +809,16 @@ mod tests {
         assert!(!log_files.is_empty(), "No log files found");
 
         let content = std::fs::read_to_string(log_files[0].path()).expect("read log");
-        assert!(content.contains("[EXIT]"), "Expected [EXIT] in log, got: {}", content);
-        assert!(content.contains("code="), "Expected 'code=' in log, got: {}", content);
+        assert!(
+            content.contains("[EXIT]"),
+            "Expected [EXIT] in log, got: {}",
+            content
+        );
+        assert!(
+            content.contains("code="),
+            "Expected 'code=' in log, got: {}",
+            content
+        );
     }
 
     #[tokio::test]
@@ -785,6 +838,10 @@ mod tests {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().ends_with(".log"))
             .collect();
-        assert!(log_files.is_empty(), "Expected NO log files when logging disabled, found: {:?}", log_files);
+        assert!(
+            log_files.is_empty(),
+            "Expected NO log files when logging disabled, found: {:?}",
+            log_files
+        );
     }
 }
