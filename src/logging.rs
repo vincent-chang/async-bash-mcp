@@ -187,11 +187,13 @@ mod tests {
     fn test_get_log_dir_env_var() {
         let _lock = env_lock();
         let _guard = EnvGuard::new("ASYNC_BASH_LOG_DIR");
-        env::set_var("ASYNC_BASH_LOG_DIR", "/tmp/custom-logs");
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let tmp_path = tmp.path().to_string_lossy().to_string();
+        env::set_var("ASYNC_BASH_LOG_DIR", &tmp_path);
         let log_dir = get_log_dir();
         assert_eq!(
             log_dir.to_string_lossy(),
-            "/tmp/custom-logs",
+            tmp_path,
             "Expected log_dir to match env var"
         );
     }

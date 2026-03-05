@@ -393,7 +393,6 @@ impl Default for ProcessManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::*;
 
     /// Helper: cleanup env var after test
     struct EnvGuard {
