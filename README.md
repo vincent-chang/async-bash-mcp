@@ -81,3 +81,11 @@ Download the pre-built binary from [GitHub Releases](https://github.com/vincent-
 cargo build --release
 # Binary will be at: target/release/async-bash-mcp
 ```
+
+### macOS Note
+
+If you downloaded the binary from GitHub Releases, macOS Gatekeeper may block it from running. Remove the quarantine attribute first:
+
+```bash
+xattr -d com.apple.quarantine /path/to/async-bash-mcp
+```

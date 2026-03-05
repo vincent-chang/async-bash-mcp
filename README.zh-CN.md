@@ -80,3 +80,11 @@
 cargo build --release
 # 二进制文件位于：target/release/async-bash-mcp
 ```
+
+### macOS 提示
+
+如果你从 GitHub Releases 下载的二进制文件被 macOS Gatekeeper 拦截，运行前需要先移除隔离属性：
+
+```bash
+xattr -d com.apple.quarantine /path/to/async-bash-mcp
+```
