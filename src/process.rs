@@ -16,8 +16,6 @@ pub struct ProcessInfo {
     child_pid: Option<u32>,
     stdout_buffer: Arc<Mutex<String>>,
     stderr_buffer: Arc<Mutex<String>>,
-    stdout_position: usize,
-    stderr_position: usize,
     accessed: bool,
     finished: Arc<AtomicBool>,
     exit_code: Arc<Mutex<Option<i32>>>,
@@ -89,6 +87,9 @@ impl ProcessManager {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Spawn the shell into its own process group so that terminate
+            // can send signals to the entire group (shell + all pipeline children).
+            .process_group(0)
             .kill_on_drop(true);
 
         if let Some(ref cwd_path) = resolved_cwd {
@@ -200,8 +201,6 @@ impl ProcessManager {
                 child_pid,
                 stdout_buffer,
                 stderr_buffer,
-                stdout_position: 0,
-                stderr_position: 0,
                 accessed: false,
                 finished,
                 exit_code,
@@ -236,10 +235,11 @@ impl ProcessManager {
 
         if terminate && !finished.load(Ordering::SeqCst) {
             if let Some(pid) = self.processes[&process_id].child_pid {
-                let _ = nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(pid as i32),
-                    nix::sys::signal::Signal::SIGTERM,
-                );
+                // Negate the PID to address the entire process group (shell + all pipeline
+                // children). The shell was spawned with process_group(0), so its PGID equals
+                // its own PID.
+                let pgid = nix::unistd::Pid::from_raw(-(pid as i32));
+                let _ = nix::sys::signal::kill(pgid, nix::sys::signal::Signal::SIGTERM);
             }
             {
                 let guard = logger_for_signal.lock().await;
@@ -254,10 +254,8 @@ impl ProcessManager {
 
             if timed_out && !finished.load(Ordering::SeqCst) {
                 if let Some(pid) = self.processes[&process_id].child_pid {
-                    let _ = nix::sys::signal::kill(
-                        nix::unistd::Pid::from_raw(pid as i32),
-                        nix::sys::signal::Signal::SIGKILL,
-                    );
+                    let pgid = nix::unistd::Pid::from_raw(-(pid as i32));
+                    let _ = nix::sys::signal::kill(pgid, nix::sys::signal::Signal::SIGKILL);
                 }
                 {
                     let guard = logger_for_signal.lock().await;
@@ -334,20 +332,19 @@ impl ProcessManager {
             }
         }
 
-        // Extract incremental output
+        // Extract incremental output by draining the buffer — this is safe for
+        // any UTF-8 content because we drain whole Strings (never mid-char slices).
         let proc = self.processes.get_mut(&process_id).unwrap();
 
         let new_stdout = {
-            let guard = proc.stdout_buffer.lock().await;
-            guard[proc.stdout_position..].to_string()
+            let mut guard = proc.stdout_buffer.lock().await;
+            guard.drain(..).collect::<String>()
         };
-        proc.stdout_position += new_stdout.len();
 
         let new_stderr = {
-            let guard = proc.stderr_buffer.lock().await;
-            guard[proc.stderr_position..].to_string()
+            let mut guard = proc.stderr_buffer.lock().await;
+            guard.drain(..).collect::<String>()
         };
-        proc.stderr_position += new_stderr.len();
 
         let elapsed_time = proc.start_time.elapsed().as_secs_f64() * 1000.0;
         let is_finished = proc.finished.load(Ordering::SeqCst);
@@ -359,8 +356,6 @@ impl ProcessManager {
 
         if is_finished {
             proc.accessed = true;
-            proc.stdout_buffer.lock().await.clear();
-            proc.stderr_buffer.lock().await.clear();
         }
 
         Ok(PollResult {
@@ -842,6 +837,74 @@ mod tests {
             log_files.is_empty(),
             "Expected NO log files when logging disabled, found: {:?}",
             log_files
+        );
+    }
+
+    // --- Bug regression tests ---
+
+    /// UTF-8 multi-byte characters should not cause a panic when output is read
+    /// incrementally (stdout_position was a byte offset that could land mid-char).
+    #[tokio::test]
+    async fn test_multibyte_utf8_incremental_output() {
+        let mut pm = ProcessManager::new(false);
+        // Output contains multi-byte UTF-8 (Chinese characters, emoji).
+        // Two polls exercise the incremental slice logic.
+        let id = pm
+            .spawn_process("printf '你好世界\n' && sleep 0.1 && printf '🎉done\n'", None)
+            .await
+            .unwrap();
+        let r1 = pm.poll_process(id, 200, false, None).await.unwrap();
+        let r2 = pm.poll_process(id, 3000, false, None).await.unwrap();
+        let combined = format!("{}{}", r1.stdout, r2.stdout);
+        assert!(
+            combined.contains('你'),
+            "should contain Chinese chars, got: {:?}",
+            combined
+        );
+        assert!(
+            combined.contains("🎉done"),
+            "should contain emoji output, got: {:?}",
+            combined
+        );
+    }
+
+    /// When terminate=true on a pipeline command, ALL child processes in the
+    /// pipeline must be killed, not just the shell process.
+    #[tokio::test]
+    async fn test_terminate_kills_process_group() {
+        let mut pm = ProcessManager::new(false);
+        // `sleep 30 | cat` — the shell forks both `sleep` and `cat`.
+        // After terminate, neither should survive.
+        // Use a unique marker to avoid matching other test processes.
+        let unique = "async_bash_mcp_terminate_test_marker_31415926";
+        let cmd = format!("sleep 30 | cat # {unique}");
+        let id = pm.spawn_process(&cmd, None).await.unwrap();
+        // Brief wait so bash has time to fork the pipeline children.
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        let start = Instant::now();
+        let result = pm.poll_process(id, 8000, true, None).await.unwrap();
+        let elapsed = start.elapsed().as_millis();
+        assert!(
+            result.finished,
+            "pipeline should be finished after terminate"
+        );
+        assert!(
+            elapsed < 5000,
+            "terminate should complete quickly (all procs killed), took {}ms",
+            elapsed
+        );
+        // Give the OS a moment to reap processes.
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        // Confirm the `sleep 30` pipeline child is actually dead (not a lingering orphan).
+        // If only the shell was killed, `sleep` would still be running.
+        let orphan_check = std::process::Command::new("pgrep")
+            .args(["-f", unique])
+            .output()
+            .expect("pgrep");
+        assert!(
+            orphan_check.stdout.is_empty(),
+            "pipeline child should not be running after terminate (orphan leak), pgrep found: {:?}",
+            String::from_utf8_lossy(&orphan_check.stdout)
         );
     }
 }
