@@ -850,7 +850,10 @@ mod tests {
         // Output contains multi-byte UTF-8 (Chinese characters, emoji).
         // Two polls exercise the incremental slice logic.
         let id = pm
-            .spawn_process("printf '你好世界\n' && sleep 0.1 && printf '🎉done\n'", None)
+            .spawn_process(
+                "printf '你好世界\n' && sleep 0.1 && printf '🎉done\n'",
+                None,
+            )
             .await
             .unwrap();
         let r1 = pm.poll_process(id, 200, false, None).await.unwrap();
